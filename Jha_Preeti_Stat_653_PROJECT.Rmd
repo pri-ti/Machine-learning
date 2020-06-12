@@ -1,0 +1,262 @@
+---
+title: "Jha_Preeti_Stat_653_project"
+author: "PREETI"
+date: "5/10/2020"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+# Topic Modeling and LDA
+In analyzing text data, we attempt to derive meaning from a collection of documents. Primarily, this involves statistically separating these documents into groups based on their characteristics. One popular method of achieving this is through Topic Modeling. Topic modeling is an unsupervised classification method for extracting topics from collections of documents, where the topics or groups are unobserved. The statistical method driving the classification of documents to topics is a form of natural language processing known as Latent Dirichlet Allocation, or LDA.
+
+The driving principles behind the LDA algorithm are as follows:
+
+1.) A document can be represented as a mixture of topics
+
+2.) Every topic can be represented by a mixture of words
+
+Leveraging these principles, we can see how each document can be analyzed based on the likelihood that it belongs to a certain topic, based on the mixture of words that it contains.
+
+
+***PACAKAGES USED***
+```{r}
+library(knitr)
+opts_chunk$set(message = FALSE, warning = FALSE, cache = TRUE)
+options(width = 100, dplyr.width = 150)
+library(ggplot2)
+library(methods)
+library(scales)
+theme_set(theme_light())
+library(tidytext)
+library(tidyr)
+library(tidytext)
+library(topicmodels)
+library(tidyverse)
+library(gutenbergr)
+```
+
+***PREPROCESSING DATA***
+The gutenbergr pacakage contains book from gutenberg project.Each book is alraedy separated into chapters.We create a table of the document, which is a combined column of gutenberg_id , a title  and  text column which contains the corpus.
+
+```{r}
+
+Titles <- c( "The Three Musketeers","Captain Blood",
+            "The Martyrs of Science, or, The lives of Galileo, Tycho Brahe, and Kepler", "The Keepers of the King's Peace","Little Women")
+```
+
+
+
+```{r}
+
+books <- gutenberg_works(title %in% Titles)%>%
+  gutenberg_download(meta_fields="title")
+books
+```
+
+
+*Here we divide  books from gutenbergr pacakage   into chapters.*
+```{r}
+library(stringr)
+# matching pattern of chapter using regular expression
+by_chapter <- books%>%
+  group_by(title)%>%
+  mutate(chapter = cumsum(str_detect(text,regex("^chapter",
+                                                ignore_case=TRUE))))%>%
+  ungroup()%>%
+  filter(chapter > 0)%>%
+  unite(document,title,chapter)
+by_chapter
+```
+*We can then use unnest_tokens to take each individual word from the corpus (split into words)*
+```{r}
+#split into words
+by_chapter_word <- by_chapter%>%
+  unnest_tokens(word,text)
+by_chapter_word
+```
+
+*There are many words from which we can not derive meaning used frequently in english sentence construction (i.e. “the”, “as”, “and”, “of”). These words, called stop_words in the tidytext package, are systematically removed using anti_join.*
+```{r}
+# find document-word counts
+word_counts <- by_chapter_word%>%
+  anti_join(stop_words)%>%
+  count(document,word,sort=TRUE)%>%
+  ungroup()
+top_n(word_counts, 20)
+```
+*The top words from each title, separated into chapters, and their frequency are stored in the word_counts tibble. It is not uncommon for the most common terms in your documents to be names and other proper nouns. These may or may not add value to the meaning we are trying to extract from our data. In the case of this collection, the most frequent word for each chapter is, unsurprisingly,bones This would add very little meaning as an extracted topic named “bones” would be present overwhelmingly in every document. We can add custom terms to our stopwords with*
+
+```{r}
+stopwords <- add_row(stop_words, word = c("bones","jo"), lexicon = c("bing", "bing"))
+
+# find document-word counts
+word_counts <- by_chapter_word %>%
+  anti_join(stopwords) %>%
+  count(document, word, sort = TRUE) %>%
+  ungroup()
+```
+*These topics (sans main character names) could prove more insightful to the different topics between the book and chapters. We can see a more diverse set of most frequent terms.*
+
+```{r}
+top_n(word_counts, 10)
+```
+
+*As of now we can only analyze how frequent each term is in each document, therefore futher processing is required. We must transform our term frequencies into a document-term matrix (dtm). This is a aptly-named matrix where the columns are documents and rows are terms. The values of this matrix are the respective frequency (or weighting) of each of the terms. We are looking for high sparsity in the matrix, as this will allow us to more effectively find natural grouping of the data (or topics).*
+
+```{r}
+chapters_dtm <- word_counts%>%
+  cast_dtm(document,word,n)
+ chapters_dtm
+```
+
+# LDA
+*Now that we have a dtm object constructed, we can continue with the implementing the driving force of topic modeling, Latent Dirichlet Allocation (LDA). LDA finds the mixture of words that make up each topic and the mixture of topics that make up each document. Based on the words in each document, we can then determine how likely each document is associated with a topic. We can choose any number of topics, but since we are looking for differences in topics between the books, we can start with 5. We can see that each topic is associated with a number of words, with a respective beta indicating how much it contributes to that topic.*
+
+```{r}
+chapters_lda <- LDA(chapters_dtm,k = 5,control= list(seed = 1234))
+chapters_lda
+```
+
+```{r}
+chapter_topics <- tidy(chapters_lda,matrix = "beta")
+top_n(chapter_topics, 10)
+```
+
+
+*Examining per-topic-per-word probabilities  has turned the model into a ***one-topic-per-term-per-row format***. For each combination, the model computes the probability of that term being generated from that topic.Finding the top 5 terms within each topic*.
+
+```{r}
+top_terms <- chapter_topics%>%
+  group_by(topic)%>%
+  top_n(5,beta)%>%
+  ungroup()%>%
+arrange(topic,-beta)
+
+
+top_terms
+```
+
+***Data visualization***  
+
+```{r}
+library(ggplot2)
+top_terms%>%
+  mutate(term = reorder_within(term,beta,topic))%>%
+  ggplot(aes(term,beta,fill = "topic"))+
+  geom_col(show.legend = FALSE)+
+  facet_wrap(~topic,scales = "free")+
+  coord_flip()+
+  scale_x_reordered()
+```
+
+*The top words that make up each topic are shown with their respective contribution (beta) to that topic. At this point, we can note some similarities between the top words in each topic.For example "amy","beth","meg" appear in top terms of both 1st and 2nd book. Topics contain the same words, but the extent to which they contribute to a given topic differs. Since our corpus belong two five books in a series, many significant words may be shared between topics (may be  there is a common theme between theses books). This will come into play when we wish to determine our classification accuracy.*
+
+# Gamma
+*Until now, we’eve been looking at the construction of topics from words, given their beta (how frequent they are in each topic). Next, we would like to know how much each document is associated with each topic. The metric for this is “gamma” or the per-document-per-topic probability. In essence, gamma is the proportion of the document that is made up of words from the assigned topic.  We use the tidy function here to portray information from our statistical model in a one-token-per-row format for ease of interpretability.*
+
+```{r}
+chapters_gamma <- tidy(chapters_lda,matrix = "gamma")
+chapters_gamma
+```
+
+
+*Each document in this analysis represented a single chapter.Each of these values is an estimated proportion of words from document that are generated from that topic.Now that we have these topic probabilities, we can see how well our unsupervised learning did at distinguishing the five books. We’d expect that chapters within a book would be found to be mostly (or entirely), generated from the corresponding topic.* 
+
+*First we re-separate the document name into title and chapter, after which we can visualize the per-document-per-topic probability for each.*
+```{r}
+chapters_gamma <- chapters_gamma%>%
+  separate(document,c("title","chapter"),sep = "_",convert=TRUE)
+top_n(chapters_gamma, 10)
+```
+ *We may inspect visually how well our unsupervised learning was able to distinguish between the topics for each of the titles. Accomplishing this through a boxplot, we can make a few observations. Ideally, we would like the box and whiskers to be distinguished from eachother for each of the titles, which may be the case if we were looking at titles that are not of the same franchise.We can see that "little women" and"The Martyrs of Science, or, The lives of Galileo, Tycho Brahe, and Kepler" has some overlap. we will see that many documents are mixtures of topics to varying degrees, and rarely associates with only one topic.*
+```{r}
+chapters_gamma %>%
+  mutate(title = reorder(title, gamma * topic)) %>%
+  ggplot(aes(factor(topic), gamma)) +
+  geom_boxplot() +
+  facet_wrap(~ title)
+```
+# Classification
+*The goal of Unsupervised Classification is to be able to assign each document with the topic is most likely belongs to. This topic assigned is generally the topic which contains the highest proportion of words in the document, or in this case chapter. We can then classify each of the titles as a belonging to a specific topic. The consensus title is determined by which topic is most present in the chapters of the title.*
+
+```{r}
+chapter_classifications <- chapters_gamma %>%
+  group_by(title, chapter) %>%
+  top_n(1, gamma) %>%
+  ungroup()
+
+#chapter_classifications
+```
+
+*We can then compare each to the "consensus" topic for each book (the most common topic among its chapters), and see which were most often misidentified.*
+```{r}
+book_topics <- chapter_classifications %>%
+  count(title, topic) %>%
+  group_by(title) %>%
+  top_n(1, n) %>%
+  ungroup() %>%
+  transmute(consensus = title, topic)
+
+chapter_classifications %>%
+  inner_join(book_topics, by = "topic") %>%
+  filter(title != consensus)
+```
+*We saw that "The Martyrs of Science, or, The lives of Galileo, Tycho Brahe, and kepler" and "The Keepers of the King's Peace" are misclassified  as LDA described one as coming from "The Keepers of the King's Peace"(topic) and "The Keepers of the King's Peace" coming from"The Martyrs of Science, or, The lives of Galileo, Tycho Brahe, and kepler*
+
+# By word assignments: `augment`
+
+**One step of the LDA algorithm is assigning each word in each document to a topic. The more words in a document are assigned to that topic, generally, the more weight (`gamma`) will go on that document-topic classification.We may want to take the original document-word pairs and find which words in each document were assigned to which topic. This is the job of the `augment()` function, which also originated in the broom package as a way of tidying model output. While `tidy()` retrieves the statistical components of the model, `augment()` uses a model to add information to each observation in the original data*.
+
+
+---
+*We can then use augment function to add the count of each term next to the topic the term has been assigned to. This way, we know how much each word weighs in on the topic assignment of the chapter, and ultimately title, as a whole*
+```{r}
+assignments <-augment(chapters_lda,chapters_dtm) 
+top_n(assignments, 10)
+```
+
+*This returns a tidy data frame of book term counts,but  adds an extra colomn topic,with the topic each term is assigned within each document.We can combine this assignment tables with consensus book titles to find which words were incorrectly classified*
+```{r}
+assignments <- assignments%>%
+  separate(document,c("title","chapter"),sep="_", convert=TRUE)%>%
+  inner_join(book_topics,by = c(".topic"="topic"))
+assignments
+```
+
+*This combination of the true book (`title`) and the book assigned to it (`consensus`) is useful for further exploration. We can, for example, visualize a **confusion matrix**, showing how often words from one book were assigned to another,visualizing*
+
+*Visualizing a confusion table, we can investigate the proportion of assignments from one titles were assigned to another title. We can confirm what we predicted with the boxplot. Many of the topics were closely related to multiple titles (reflected by the overlapping boxplots earlier)*
+```{r,fig.height=10,fig.width=15}
+library(scales)
+
+assignments %>%
+  count(title, consensus, wt = count) %>%
+  group_by(title) %>%
+  mutate(percent = n / sum(n)) %>%
+  ggplot(aes(consensus, title, fill = percent)) +
+  geom_tile() +
+  scale_fill_gradient2(high = "red", label = percent_format()) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        panel.grid = element_blank()) +
+  labs(x = "Book words were assigned to",
+       y = "Book words came from",
+       fill = "% of assignments")
+```
+
+
+*Which terms were the culprits? We can arrange the words that were most frequent in the misassigned topics to get to the bottom of it*
+```{r}
+wrong_words <- assignments %>%
+  filter(title != consensus)
+
+wrong_words %>%
+  count(title, consensus, term, wt = count) %>%
+  ungroup() %>%
+  arrange(desc(n)) 
+  
+```
+
+*There are many words which come from "The Martyrs of Science, or, The lives of Galileo, Tycho Braheand kepler" but assigned to "The Keepers of the King's Peace" and vice versa*
